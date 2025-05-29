@@ -1,46 +1,84 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from app import query_rag_pdf as query_pdf
-from sql_rag import query_rag_sql as query_sql
+from pdf_rag import query_rag_pdf
+from sql_search import query_rag_sql
 from langchain_community.chat_models import ChatOpenAI
+
 
 app = FastAPI()
 
-# Allow frontend to access backend
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
 class QueryInput(BaseModel):
     query: str
+
 
 @app.post("/query")
 async def get_responses(data: QueryInput):
     query = data.query
 
-    pdf_resp = query_pdf(query)
-    sql_resp = query_sql(query)
 
-    combined_prompt = f"""
-    You are a helpful assistant. Two sources provided the following information:
+    try:
+        # Get PDF-based and SQL-based responses
+        pdf_response = query_rag_pdf(query)
+        sql_response = query_rag_sql(query)
 
-    PDF-based answer:
-    {pdf_resp}
 
-    SQL ticket-based answer:
-    {sql_resp}
+        # Combine them into one prompt
+        combined_prompt = f"""
+        You are a helpful assistant. Below are two responses retrieved from different sources for the same user query.
 
-    Please combine and rewrite both into one helpful answer.
-    """
-    final_resp = ChatOpenAI().invoke(combined_prompt).content
 
-    return {
-        "pdf_response": pdf_resp,
-        "sql_response": sql_resp,
-        "final_response": final_resp
-    }
+        Response from PDF-based documentation:
+        {pdf_response.content if hasattr(pdf_response, "content") else pdf_response}
+
+
+        Response from previously resolved SQL tickets:
+        {sql_response}
+
+
+        Please merge and rewrite these into a single, clear, concise, and helpful answer for the user.
+        """
+
+
+        model = ChatOpenAI()
+        final_response = model.invoke(combined_prompt)
+
+
+        # Optional logging for debugging
+        print("###########PDF RESPONSE###########")
+        print(pdf_response.content if hasattr(pdf_response, "content") else pdf_response)
+        print("###########SQL RESPONSE###########")
+        print(sql_response)
+        print("###########FINAL RESPONSE###########")
+        print(final_response.content)
+
+
+        return {
+            "pdf_response": pdf_response.content if hasattr(pdf_response, "content") else pdf_response,
+            "sql_response": sql_response,
+            "final_response": final_response.content
+        }
+
+
+    except Exception as e:
+        return {
+            "pdf_response": f"Error: {str(e)}",
+            "sql_response": f"Error: {str(e)}",
+            "final_response": f"Sorry, an error occurred: {str(e)}"
+        }
+
+
+@app.get("/")
+async def root():
+    return {"message": "Support System RAG API is running"}
+
